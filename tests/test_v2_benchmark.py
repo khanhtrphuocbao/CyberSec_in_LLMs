@@ -3,6 +3,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from medqa_rag.evaluation import v2_benchmark
 from medqa_rag.evaluation.v2_benchmark import RAGContextCache, V2BenchmarkRunner
@@ -87,6 +88,18 @@ class V2BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual({row["question_id"] for row in results}, {"q1", "q2", "q3"})
         self.assertEqual(len({id(system) for system in worker_systems}), 3)
         self.assertTrue((self.output_dir / "results_V2.json").exists())
+
+    def test_checkpoints_after_each_completed_question(self):
+        runner = V2BenchmarkRunner(
+            self.questions,
+            self.output_dir,
+            workers=3,
+            system_factory=RecordingSystemFactory(threading.Barrier(3)),
+        )
+        with mock.patch.object(runner, "_save_results") as save_results:
+            runner.run()
+
+        self.assertEqual(save_results.call_count, 3)
 
     def test_result_includes_its_share_of_precomputed_retrieval_latency(self):
         runner = V2BenchmarkRunner(self.questions[:1], self.output_dir, workers=1, system_factory=RecordingSystemFactory())

@@ -158,7 +158,6 @@ class V2BenchmarkRunner:
         if not pending_questions:
             return self._ordered_results()
 
-        completed_since_checkpoint = 0
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             futures = {
                 executor.submit(self._solve_question, question, contexts[question.question_id]): question
@@ -167,12 +166,10 @@ class V2BenchmarkRunner:
             for future in as_completed(futures):
                 question = futures[future]
                 self.existing[question.question_id] = future.result()
-                completed_since_checkpoint += 1
-                if completed_since_checkpoint == 20:
-                    self._save_results()
-                    completed_since_checkpoint = 0
+                # Checkpoint from the main thread immediately: a long-running
+                # LLM benchmark should lose at most the in-flight questions.
+                self._save_results()
 
-        self._save_results()
         return self._ordered_results()
 
     def _get_worker_system(self) -> MedQASystem:
