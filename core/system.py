@@ -121,7 +121,8 @@ REASONING: [brief explanation based on guidelines]"""
         keyword_model: str = "gpt-5.4",
         use_huggingface: Optional[bool] = None,
         hf_model_name: Optional[str] = None,
-        hf_token: Optional[str] = None
+        hf_token: Optional[str] = None,
+        chroma_collection_name: Optional[str] = None,
     ):
         """
         Initialize the MedQA system.
@@ -154,6 +155,8 @@ REASONING: [brief explanation based on guidelines]"""
             hf_model_name = rag_cfg.hf_model_name
         if hf_token is None and rag_cfg:
             hf_token = rag_cfg.hf_token
+        if chroma_collection_name is None and rag_cfg:
+            chroma_collection_name = rag_cfg.collection_name
 
         self.api_key = api_key
         self.model = model
@@ -168,6 +171,7 @@ REASONING: [brief explanation based on guidelines]"""
         # Initialize RAG (lazy - only for variants that need it)
         self._rag: Optional[MedQA_RAG] = None
         self.rag_persist_dir = rag_persist_dir
+        self.chroma_collection_name = chroma_collection_name or "medqa_textbooks_injected"
         self.use_existing_rag = use_existing_rag
 
         # Two-step Retrieval config
@@ -203,7 +207,8 @@ REASONING: [brief explanation based on guidelines]"""
                 keyword_model=self.keyword_model,
                 use_huggingface=self.use_huggingface,
                 hf_model_name=self.hf_model_name,
-                hf_token=self.hf_token
+                hf_token=self.hf_token,
+                collection_name=self.chroma_collection_name,
             )
             if self.use_existing_rag:
                 self._rag._load_existing_store()

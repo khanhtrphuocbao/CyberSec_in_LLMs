@@ -28,6 +28,7 @@ except ImportError:
 class RAGConfig:
     """RAG configuration for ChromaDB."""
     persist_dir: str = "/Users/mac/Developers/MedQA_RAG/MedQA_ChromaDB_Injected"
+    collection_name: str = "medqa_textbooks_injected"
     chunk_size: int = 1000
     chunk_overlap: int = 100
     top_k: int = 5
@@ -85,7 +86,8 @@ class Config:
     def rag(self) -> RAGConfig:
         if self._rag is None:
             self._rag = RAGConfig(
-                persist_dir=os.environ.get("RAG_PERSIST_DIR", "./medqa_vectorstore"),
+            persist_dir=os.environ.get("RAG_PERSIST_DIR", "./medqa_vectorstore"),
+            collection_name=os.environ.get("CHROMA_COLLECTION_NAME", "medqa_textbooks_injected"),
                 chunk_size=int(os.environ.get("RAG_CHUNK_SIZE", "1000")),
                 chunk_overlap=int(os.environ.get("RAG_CHUNK_OVERLAP", "100")),
                 top_k=int(os.environ.get("RAG_TOP_K", "5")),

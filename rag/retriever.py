@@ -96,6 +96,7 @@ class MedQA_RAG:
         use_huggingface: bool = False,
         hf_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         hf_token: Optional[str] = None,
+        collection_name: str = "medqa_textbooks_injected",
         api_base: Optional[str] = None,
         keyword_model: str = "gpt-5.4"
     ):
@@ -115,6 +116,7 @@ class MedQA_RAG:
         """
         self.openai_api_key = openai_api_key
         self.persist_directory = persist_directory
+        self.collection_name = collection_name
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.hf_token = hf_token
@@ -221,7 +223,8 @@ Answer:"""
             self.vectorstore = Chroma.from_documents(
                 documents=chunks,
                 embedding=self.embeddings,
-                persist_directory=self.persist_directory
+                persist_directory=self.persist_directory,
+                collection_name=self.collection_name,
             )
         else:
             self.vectorstore.add_documents(chunks)
@@ -519,7 +522,8 @@ Answer:"""
         try:
             self.vectorstore = Chroma(
                 persist_directory=self.persist_directory,
-                embedding_function=self.embeddings
+                embedding_function=self.embeddings,
+                collection_name=self.collection_name,
             )
             self._initialized = True
             print(f"[RAG] Loaded existing vector store from {self.persist_directory}")

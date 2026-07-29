@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from medqa_rag.rag.retriever import MedQA_RAG
 
@@ -31,6 +32,25 @@ class FakeVectorStore:
 
 
 class BatchRetrievalTests(unittest.TestCase):
+    def test_opens_the_injected_textbook_collection_instead_of_empty_langchain_default(self):
+        rag = MedQA_RAG.__new__(MedQA_RAG)
+        rag.persist_directory = "/vector-store"
+        rag.embeddings = object()
+        rag._initialized = False
+        rag.vectorstore = None
+        rag.collection_name = "medqa_textbooks_injected"
+
+        with mock.patch("medqa_rag.rag.retriever.os.path.exists", return_value=True), mock.patch(
+            "medqa_rag.rag.retriever.Chroma"
+        ) as chroma:
+            self.assertTrue(rag._load_existing_store())
+
+        chroma.assert_called_once_with(
+            persist_directory="/vector-store",
+            embedding_function=rag.embeddings,
+            collection_name="medqa_textbooks_injected",
+        )
+
     def test_embeds_queries_once_and_returns_contexts_in_request_order(self):
         rag = MedQA_RAG.__new__(MedQA_RAG)
         rag._initialized = True

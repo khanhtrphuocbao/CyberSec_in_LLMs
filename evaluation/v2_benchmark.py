@@ -233,6 +233,7 @@ class V2BenchmarkRunner:
             "two_step_retrieval": self.use_two_step_retrieval,
             "valid_book_names": self.valid_book_names,
             "rag_persist_dir": getattr(self._prefetch_system, "rag_persist_dir", None),
+            "chroma_collection_name": getattr(self._prefetch_system, "chroma_collection_name", None),
             "embedding_model": getattr(self._prefetch_system, "hf_model_name", None),
             "use_huggingface": getattr(self._prefetch_system, "use_huggingface", None),
             "keyword_model": getattr(self._prefetch_system, "keyword_model", None),
