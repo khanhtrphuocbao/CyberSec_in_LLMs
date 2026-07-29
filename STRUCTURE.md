@@ -71,6 +71,27 @@ MedAgentPro/                        # Project root
 
 ### Running Benchmarks
 
+This repository is self-contained for the V2/V3 benchmark runners and their
+regression tests. From a clone (after creating an environment and configuring
+`.env` from `.env.example`), run:
+
+```bash
+cd medqa_rag
+
+# Unit tests do not call the API.
+PYTHONPATH=.. python -m unittest discover -s tests -v
+
+# V2 / V3 benchmark runners. Results and RAG cache stay in this checkout.
+HF_HUB_OFFLINE=1 nohup python -u run_v2.py --workers 3 > run_v2.log 2>&1 &
+HF_HUB_OFFLINE=1 nohup python -u run_v3.py --workers 2 > run_v3.log 2>&1 &
+```
+
+The wrappers load this checkout as the `medqa_rag` package even if the clone
+directory has a different name. A running benchmark launched from the former
+parent-level wrapper is unaffected.
+
+### Legacy parent-project commands
+
 ```bash
 cd /Users/mac/Developers/MedQA_RAG/MedAgentPro
 
