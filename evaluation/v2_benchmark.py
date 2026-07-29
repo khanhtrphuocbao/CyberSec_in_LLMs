@@ -279,6 +279,14 @@ class V3BenchmarkRunner(V2BenchmarkRunner):
         super().__init__(*args, **kwargs)
 
 
+class V4BenchmarkRunner(V2BenchmarkRunner):
+    """Run V4 with cached RAG and isolated workers, without an evaluator."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        kwargs["variant"] = "V4"
+        super().__init__(*args, **kwargs)
+
+
 def build_v2_parser() -> argparse.ArgumentParser:
     """Build the V2-only benchmark CLI without starting a benchmark."""
     parser = argparse.ArgumentParser(description="Run the resumable V2 MedQA benchmark")

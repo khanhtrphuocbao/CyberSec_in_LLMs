@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from medqa_rag.evaluation import v2_benchmark
-from medqa_rag.evaluation.v2_benchmark import RAGContextCache, V2BenchmarkRunner
+from medqa_rag.evaluation.v2_benchmark import RAGContextCache, V2BenchmarkRunner, V4BenchmarkRunner
 
 
 class RAGContextCacheTests(unittest.TestCase):
@@ -46,9 +46,10 @@ class FakeRAG:
 
 class FakeSystem:
     def __init__(self, barrier=None):
-        self.rag, self.barrier, self.solve_thread_id = FakeRAG(), barrier, None
+        self.rag, self.barrier, self.solve_thread_id, self.variant = FakeRAG(), barrier, None, None
     def solve(self, *, question, options, correct_answer, question_id, variant, guidelines, **kwargs):
         self.solve_thread_id = threading.get_ident()
+        self.variant = variant
         if self.barrier: self.barrier.wait(timeout=5)
         return FakeSolveResult(question_id)
 
@@ -107,6 +108,13 @@ class V2BenchmarkRunnerTests(unittest.TestCase):
         enriched = runner._attach_prefetch_telemetry({"latency_seconds": 10.0, "metadata": {"rag_trace": {}, "latency_breakdown_seconds": {"retrieval": 0.0, "total": 10.0}}}, "q1")
         self.assertEqual(enriched["latency_seconds"], 11.25)
         self.assertEqual(enriched["metadata"]["latency_breakdown_seconds"]["retrieval"], 1.25)
+
+    def test_v4_runner_writes_its_own_output_and_solves_as_v4(self):
+        factory = RecordingSystemFactory()
+        results = V4BenchmarkRunner(self.questions[:1], self.output_dir.parent / "results_V4", workers=1, system_factory=factory).run()
+        self.assertEqual(results[0]["question_id"], "q1")
+        self.assertEqual(factory.instances[-1].variant, "V4")
+        self.assertTrue((self.output_dir.parent / "results_V4" / "results_V4.json").exists())
 
 
 class V2CliTests(unittest.TestCase):
