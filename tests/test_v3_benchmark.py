@@ -55,3 +55,8 @@ class V3BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(args.workers, 2)
         self.assertEqual(args.output_dir, "results_V3")
         self.assertEqual(args.cache_file, "results_V3/rag_cache.json")
+
+    def test_v3_cli_can_select_a_dedicated_api_key_environment_variable(self):
+        args = build_v3_parser().parse_args(["--api-key-env", "OPENAI_API_KEY_2"])
+
+        self.assertEqual(args.api_key_env, "OPENAI_API_KEY_2")

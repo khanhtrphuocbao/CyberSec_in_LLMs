@@ -2,6 +2,7 @@
 """CLI entry point for the resumable, parallel V3 MedQA benchmark."""
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -26,6 +27,8 @@ _load_local_package()
 
 from medqa_rag.evaluation.v2_benchmark import V3BenchmarkRunner, build_v2_parser
 from medqa_rag.rag.data_loader import MedQALoader
+from medqa_rag.core.system import MedQASystem
+from medqa_rag.config import load_config
 
 
 def build_v3_parser():
@@ -33,6 +36,11 @@ def build_v3_parser():
     parser = build_v2_parser()
     parser.description = "Run the resumable V3 MedQA benchmark"
     parser.set_defaults(output_dir="results_V3", cache_file="results_V3/rag_cache.json", workers=2)
+    parser.add_argument(
+        "--api-key-env",
+        default="OPENAI_API_KEY",
+        help="Environment variable containing the API key to dedicate to V3",
+    )
     for action in parser._actions:
         if action.dest == "output_dir":
             action.help = "Directory for results_V3.json"
@@ -42,7 +50,12 @@ def build_v3_parser():
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = build_v3_parser().parse_args(argv)
+    parser = build_v3_parser()
+    args = parser.parse_args(argv)
+    load_config()
+    api_key = os.environ.get(args.api_key_env)
+    if not api_key:
+        parser.error(f"Environment variable {args.api_key_env} is not set")
     book_names = args.valid_book_names.split(",") if args.valid_book_names else None
     questions = MedQALoader().load_json(args.data_path)
     runner = V3BenchmarkRunner(
@@ -53,6 +66,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         top_k=args.top_k,
         use_two_step_retrieval=args.two_step_retrieval,
         valid_book_names=book_names,
+        system_factory=lambda: MedQASystem(api_key=api_key),
     )
     results = runner.run()
     valid_results = [result for result in results if result.get("is_valid") is not False]
