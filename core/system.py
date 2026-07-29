@@ -713,27 +713,61 @@ Options:
               (" [Two-step]" if use_two_step else ""))
 
         # Get guidelines (standard RAG or Two-step)
+        guidelines_supplied = guidelines is not None
+        total_start = time.perf_counter()
+        retrieval_start = time.perf_counter()
         guidelines = self._get_guidelines(
             question, options, guidelines, top_k, use_two_step, book_names
         )
+        retrieval_latency = time.perf_counter() - retrieval_start
+
+        # V4 preserves memory within a question, never across benchmark rows.
+        self.examiner.clear_memory()
 
         # Create plan
+        planner_before = {
+            "total_tokens": self.planner.total_tokens,
+            "prompt_tokens": self.planner.prompt_tokens,
+            "completion_tokens": self.planner.completion_tokens,
+        }
+        planner_start = time.perf_counter()
         plan = self.planner.create_plan(question, options, guidelines)
+        planner_latency = time.perf_counter() - planner_start
 
         # Examine WITH memory
+        examiner_before = {
+            "total_tokens": self.examiner.total_tokens,
+            "prompt_tokens": self.examiner.prompt_tokens,
+            "completion_tokens": self.examiner.completion_tokens,
+        }
+        examiner_start = time.perf_counter()
         result = self.examiner.examine(
             question, options, guidelines, plan, use_memory=True
         )
+        examiner_latency = time.perf_counter() - examiner_start
+        total_latency = time.perf_counter() - total_start
+        latency_breakdown = {
+            "retrieval": retrieval_latency,
+            "planner": planner_latency,
+            "examiner": examiner_latency,
+            "evaluator": 0.0,
+            "total": total_latency,
+        }
 
         # Skip evaluation - take examiner's answer directly
         answer = result.get("final_answer")
         confidence = result.get("confidence", 0.5)
 
         # Build comprehensive trace
-        rag_trace = {"top_k": top_k, "two_step_retrieval": use_two_step}
+        rag_trace = {
+            "top_k": top_k,
+            "two_step_retrieval": use_two_step,
+            "guidelines_supplied": guidelines_supplied,
+        }
         if use_two_step:
-            keywords = self.rag.extract_keywords(question, max_keywords=3)
-            rag_trace["keywords"] = keywords
+            # The retrieval call already extracted keywords. Do not make a
+            # second LLM call solely to reconstruct trace metadata.
+            rag_trace["keywords"] = []
 
         planner_trace = {
             "total_steps": len(plan),
@@ -741,8 +775,18 @@ Options:
         }
 
         # Collect usage from all agents
-        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
-        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
+        planner_usage = {
+            "total_tokens": self.planner.total_tokens - planner_before["total_tokens"],
+            "prompt_tokens": self.planner.prompt_tokens - planner_before["prompt_tokens"],
+            "completion_tokens": self.planner.completion_tokens - planner_before["completion_tokens"],
+            "latency": planner_latency,
+        }
+        examiner_usage = {
+            "total_tokens": self.examiner.total_tokens - examiner_before["total_tokens"],
+            "prompt_tokens": self.examiner.prompt_tokens - examiner_before["prompt_tokens"],
+            "completion_tokens": self.examiner.completion_tokens - examiner_before["completion_tokens"],
+            "latency": examiner_latency,
+        }
         evaluator_usage = None
 
         return SolveResult(
@@ -754,7 +798,7 @@ Options:
             is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=self.examiner.get_trace(),
-            latency_seconds=planner_usage["latency"] + examiner_usage["latency"],
+            latency_seconds=total_latency,
             total_tokens=planner_usage["total_tokens"] + examiner_usage["total_tokens"],
             prompt_tokens=planner_usage["prompt_tokens"] + examiner_usage["prompt_tokens"],
             completion_tokens=planner_usage["completion_tokens"] + examiner_usage["completion_tokens"],
@@ -771,6 +815,7 @@ Options:
                 "rag_used": True,
                 "agents_used": True,
                 "two_step_retrieval": use_two_step,
+                "latency_breakdown_seconds": latency_breakdown,
                 "usage_breakdown": {
                     "planner": planner_usage,
                     "examiner": examiner_usage,
