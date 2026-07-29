@@ -37,10 +37,33 @@ except ImportError:
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain")
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_community")
 
+# Patch torch.compile for ModernPubMedBERT compatibility with Python 3.12
+# Must be before importing HuggingFaceEmbeddings
+import torch
+_orig_compile = torch.compile
+
+class _TorchCompilePatch:
+    """Wrapper for torch.compile that handles Python 3.12 Dynamo limitations."""
+    def __call__(self, model_or_options=None, *args, **kwargs):
+        if isinstance(model_or_options, type) or callable(model_or_options):
+            # Direct call: @torch.compile or torch.compile(model, ...)
+            model = model_or_options
+            try:
+                return _orig_compile(model, *args, **kwargs)
+            except (RuntimeError, TypeError):
+                return model
+        else:
+            # Decorator with options: @torch.compile(dynamic=True)
+            # Return identity decorator
+            return lambda fn: fn
+
+_torch_patch = _TorchCompilePatch()
+torch.compile = _torch_patch
+
 # LangChain components
-from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
-from langchain.schema import Document
-from langchain.prompts import PromptTemplate
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_core.prompts import PromptTemplate
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma, FAISS
 
@@ -72,7 +95,9 @@ class MedQA_RAG:
         chunk_overlap: int = 100,
         use_huggingface: bool = False,
         hf_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        api_base: Optional[str] = None
+        hf_token: Optional[str] = None,
+        api_base: Optional[str] = None,
+        keyword_model: str = "gpt-5.4"
     ):
         """
         Initialize the RAG module.
@@ -85,30 +110,36 @@ class MedQA_RAG:
             chunk_overlap: Overlap between chunks for context continuity
             use_huggingface: Use HuggingFace embeddings instead of OpenAI
             hf_model_name: HuggingFace model name for embeddings
+            hf_token: HuggingFace token for private models
             api_base: Custom API base URL (for OpenAI-compatible APIs)
         """
         self.openai_api_key = openai_api_key
         self.persist_directory = persist_directory
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.hf_token = hf_token
         self.api_base = api_base
+        self.keyword_model = keyword_model
 
         # Initialize embeddings
         if use_huggingface and HF_EMBEDDINGS_AVAILABLE:
+            model_kwargs = {"device": "cpu"}
+            if self.hf_token:
+                model_kwargs["token"] = self.hf_token
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=hf_model_name,
-                model_kwargs={"device": "cpu"}
+                model_kwargs=model_kwargs
             )
             print(f"[RAG] Using HuggingFace embeddings: {hf_model_name}")
         else:
-            embed_kwargs = {"model": embedding_model, "openai_api_key": openai_api_key}
-            if api_base:
-                embed_kwargs["openai_api_base"] = api_base
-            self.embeddings = OpenAIEmbeddings(**embed_kwargs)
-            if api_base:
-                print(f"[RAG] Using custom API: {api_base} with model {embedding_model}")
-            else:
-                print(f"[RAG] Using OpenAI embeddings: {embedding_model}")
+            # Always use OpenAI for embeddings (Codex may not support /embeddings endpoint)
+            # Explicitly set openai_api_base to None to override any environment variable
+            self.embeddings = OpenAIEmbeddings(
+                model=embedding_model,
+                openai_api_key=openai_api_key,
+                openai_api_base=None  # Force using OpenAI's default endpoint
+            )
+            print(f"[RAG] Using OpenAI embeddings: {embedding_model}")
 
         # Text splitter configuration
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -400,30 +431,81 @@ Answer:"""
 
         Args:
             question: The MedQA question
-            options: List of answer options (A, B, C, D)
+            options: List of answer options (dynamically determined from data)
             top_k: Number of context chunks
 
         Returns:
             Formatted context string
         """
-        # Combine question and options for richer retrieval
-        retrieval_query = question
-        if options:
-            options_text = " ".join(f"({chr(65+i)}) {opt}" for i, opt in enumerate(options))
-            retrieval_query = f"{question} {options_text}"
-
+        retrieval_query = self._build_retrieval_query(question, options)
         results = self.retrieve_guidelines(query=retrieval_query, top_k=top_k)
+        return self._format_context(results)
 
+    @staticmethod
+    def _build_retrieval_query(
+        question: str,
+        options: Optional[List[str]] = None,
+    ) -> str:
+        """Build the same question-plus-options query used by standard RAG."""
+        if not options:
+            return question
+        options_text = " ".join(f"({chr(65+i)}) {opt}" for i, opt in enumerate(options))
+        return f"{question} {options_text}"
+
+    @staticmethod
+    def _format_context(results: List[Dict[str, Any]]) -> str:
+        """Convert retrieved chunks into the prompt context format."""
         if not results:
             return "No relevant medical context found."
 
         context_parts = []
-        for i, r in enumerate(results, 1):
-            source = r.get("source", "Unknown source")
-            content = r["content"]
-            context_parts.append(f"[Source {i} - {source}]:\n{content}")
-
+        for i, result in enumerate(results, 1):
+            source = result.get("source", "Unknown source")
+            context_parts.append(f"[Source {i} - {source}]:\n{result['content']}")
         return "\n\n---\n\n".join(context_parts)
+
+    def get_relevant_context_batch(
+        self,
+        requests: List[tuple[str, Optional[List[str]]]],
+        top_k: int = 5,
+    ) -> List[str]:
+        """Retrieve standard RAG contexts in one embedding and Chroma query batch."""
+        if not requests:
+            return []
+
+        if not self._initialized and self.vectorstore is None:
+            self._load_existing_store()
+        if self.vectorstore is None:
+            return ["No relevant medical context found."] * len(requests)
+
+        queries = [self._build_retrieval_query(question, options) for question, options in requests]
+        query_embeddings = self.embeddings.embed_documents(queries)
+        raw_results = self.vectorstore._collection.query(
+            query_embeddings=query_embeddings,
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        contexts = []
+        all_documents = raw_results.get("documents") or []
+        all_metadatas = raw_results.get("metadatas") or []
+        all_distances = raw_results.get("distances") or []
+        for index in range(len(requests)):
+            documents = all_documents[index] if index < len(all_documents) else []
+            metadatas = all_metadatas[index] if index < len(all_metadatas) else []
+            distances = all_distances[index] if index < len(all_distances) else []
+            results = [
+                {
+                    "content": content,
+                    "source": (metadata or {}).get("source", "unknown"),
+                    "metadata": metadata or {},
+                    "score": distances[position] if position < len(distances) else None,
+                }
+                for position, (content, metadata) in enumerate(zip(documents, metadatas))
+            ]
+            contexts.append(self._format_context(results))
+
+        return contexts
 
     # =========================================================================
     # Vector Store Management
@@ -537,20 +619,21 @@ Do not answer the question. Output ONLY a comma-separated list of keywords. Keep
 
         Args:
             question_text: The MedQA question text
-            model: Model to use (default gpt-4o-mini for cost efficiency)
+            model: Model to use (defaults to self.keyword_model)
             max_keywords: Maximum number of keywords to return (default 3)
 
         Returns:
             List of extracted keywords
         """
-        import openai
+        from openai import OpenAI
 
-        # Set API base if configured
-        if self.api_base:
-            openai.api_base = self.api_base
+        # Use configured keyword_model if not specified
+        model = model or self.keyword_model
+
+        client = OpenAI(api_key=self.openai_api_key, base_url=self.api_base) if self.api_base else OpenAI(api_key=self.openai_api_key)
 
         try:
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": self.KEYWORD_EXTRACTION_PROMPT},
@@ -637,7 +720,7 @@ Do not answer the question. Output ONLY a comma-separated list of keywords. Keep
         self,
         question_text: str,
         top_k: int = 5,
-        keyword_model: str = "gpt-4o-mini",
+        keyword_model: str = "gpt-5.4",
         valid_book_names: Optional[List[str]] = None,
         use_metadata_filter: bool = True,
         return_keywords: bool = False
@@ -676,7 +759,9 @@ Do not answer the question. Output ONLY a comma-separated list of keywords. Keep
         # ==========================================
         # STEP 1: Extract Keywords via LLM
         # ==========================================
-        keywords = self.extract_keywords(question_text, model=keyword_model)
+        # Use instance keyword_model if not provided
+        kw_model = keyword_model if keyword_model else self.keyword_model
+        keywords = self.extract_keywords(question_text, model=kw_model)
 
         # Build query string from keywords
         keyword_query = ", ".join(keywords)
@@ -744,7 +829,7 @@ Do not answer the question. Output ONLY a comma-separated list of keywords. Keep
 
         Args:
             question: The MedQA question
-            options: List of answer options (A, B, C, D)
+            options: List of answer options (dynamically determined from data)
             top_k: Number of chunks to retrieve
             valid_book_names: Optional list of known book names for filtering
             use_metadata_filter: Use hard metadata filter if True

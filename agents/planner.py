@@ -9,7 +9,7 @@ Adaptations from MedAgent-Pro:
 - Outputs reasoning plan for MCQ analysis instead of diagnostic workflow
 
 The Planner receives:
-1. A MedQA question with options (A, B, C, D)
+1. A MedQA question with options (dynamically determined from data, e.g., A-E for 5-option or A-D for 4-option)
 2. Retrieved medical guidelines from RAG
 
 The Planner outputs:
@@ -20,7 +20,7 @@ The Planner outputs:
 import os
 import json
 import re
-import openai
+from openai import OpenAI
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, asdict
 
@@ -108,10 +108,13 @@ Return ONLY the JSON array, no explanations, no markdown. """
         """
         self.api_key = api_key
         self.api_base = api_base
-        openai.api_key = api_key
-        if api_base:
-            openai.api_base = api_base
+        self._client = OpenAI(api_key=api_key, base_url=api_base) if api_base else OpenAI(api_key=api_key)
         self.model = model
+        # Usage tracking
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_latency = 0.0
 
     def _build_prompt(
         self,
@@ -270,17 +273,27 @@ PREVIOUS PLAN (if any issues, refine):
         """
         messages = self._build_prompt(question, options, guidelines)
 
+        import time
         for attempt in range(max_retries):
             try:
                 # Call LLM
-                response = openai.ChatCompletion.create(
+                start = time.time()
+                response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.3,  # Lower temperature for more consistent output
+                    temperature=0.3,
                     max_tokens=2048
                 )
+                latency = time.time() - start
 
                 raw_output = response.choices[0].message.content
+
+                # Track usage
+                usage = response.usage
+                self.total_tokens += usage.total_tokens
+                self.prompt_tokens += usage.prompt_tokens
+                self.completion_tokens += usage.completion_tokens
+                self.total_latency += latency
 
                 # Parse and validate
                 plan_dicts = self._parse_plan(raw_output)

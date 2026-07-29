@@ -23,7 +23,7 @@ class MedQAQuestion:
     question_id: str
     question: str
     options: Dict[str, str]  # e.g., {"A": "...", "B": "...", ...}
-    answer: str  # The correct answer key (A, B, C, D)
+    answer: str  # The correct answer key (dynamically determined from data)
     explanation: Optional[str] = None
     meta_info: Optional[Dict[str, Any]] = None
 

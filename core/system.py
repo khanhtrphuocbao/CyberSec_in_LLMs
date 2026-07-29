@@ -19,7 +19,8 @@ Usage:
 
 import os
 import json
-import openai
+import time
+from openai import OpenAI
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -54,6 +55,11 @@ class SolveResult:
     reasoning: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    # Cost & latency tracking
+    latency_seconds: float = 0.0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -66,7 +72,11 @@ class SolveResult:
             "confidence": self.confidence,
             "reasoning": self.reasoning,
             "metadata": self.metadata,
-            "error": self.error
+            "error": self.error,
+            "latency_seconds": self.latency_seconds,
+            "total_tokens": self.total_tokens,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens
         }
 
 
@@ -101,14 +111,17 @@ REASONING: [brief explanation based on guidelines]"""
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         model: str = "gpt-4o",
         rag_persist_dir: str = "/Users/mac/Developers/MedQA_RAG/MedQA_ChromaDB_Injected",
         use_existing_rag: bool = True,
         api_base: Optional[str] = None,
         use_two_step_retrieval: bool = False,
         valid_book_names: Optional[List[str]] = None,
-        keyword_model: str = "gpt-4o-mini"
+        keyword_model: str = "gpt-5.4",
+        use_huggingface: Optional[bool] = None,
+        hf_model_name: Optional[str] = None,
+        hf_token: Optional[str] = None
     ):
         """
         Initialize the MedQA system.
@@ -123,12 +136,34 @@ REASONING: [brief explanation based on guidelines]"""
             valid_book_names: List of known book names for metadata filtering
             keyword_model: Model for keyword extraction (default gpt-4o-mini)
         """
+        # Load from config if not provided
+        from ..config import get_api_key, get_model_config, get_rag_config
+        if api_key is None:
+            api_key = get_api_key()
+        cfg = get_model_config()
+        rag_cfg = get_rag_config()
+        # Always use DEFAULT_MODEL from env config
+        if model == "gpt-4o":
+            model = cfg.default_model
+        if api_base is None:
+            api_base = cfg.api_base
+        # Load HuggingFace config from RAG config
+        if use_huggingface is None and rag_cfg:
+            use_huggingface = rag_cfg.use_huggingface
+        if hf_model_name is None and rag_cfg:
+            hf_model_name = rag_cfg.hf_model_name
+        if hf_token is None and rag_cfg:
+            hf_token = rag_cfg.hf_token
+
         self.api_key = api_key
         self.model = model
         self.api_base = api_base
-        openai.api_key = api_key
-        if api_base:
-            openai.api_base = api_base
+
+        # Create client
+        if api_key:
+            self._client = OpenAI(api_key=api_key, base_url=api_base) if api_base else OpenAI(api_key=api_key)
+        else:
+            self._client = None
 
         # Initialize RAG (lazy - only for variants that need it)
         self._rag: Optional[MedQA_RAG] = None
@@ -140,10 +175,18 @@ REASONING: [brief explanation based on guidelines]"""
         self.valid_book_names = valid_book_names
         self.keyword_model = keyword_model
 
+        # HuggingFace embeddings config
+        self.use_huggingface = use_huggingface if use_huggingface is not None else False
+        self.hf_model_name = hf_model_name or "sentence-transformers/all-MiniLM-L6-v2"
+        self.hf_token = hf_token
+
         # Initialize agents (lazy)
         self._planner: Optional[MedQA_Planner] = None
         self._examiner: Optional[MedQA_Examiner] = None
         self._evaluator: Optional[MedQA_Evaluator] = None
+
+        # Usage tracking
+        self._usage: Dict[str, Any] = {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     # =========================================================================
     # Lazy Initialization
@@ -156,7 +199,11 @@ REASONING: [brief explanation based on guidelines]"""
             self._rag = MedQA_RAG(
                 openai_api_key=self.api_key,
                 persist_directory=self.rag_persist_dir,
-                api_base=self.api_base
+                api_base=self.api_base,
+                keyword_model=self.keyword_model,
+                use_huggingface=self.use_huggingface,
+                hf_model_name=self.hf_model_name,
+                hf_token=self.hf_token
             )
             if self.use_existing_rag:
                 self._rag._load_existing_store()
@@ -253,7 +300,9 @@ REASONING: [brief explanation based on guidelines]"""
                     guidelines, top_k, use_two_step, book_names
                 )
         except Exception as e:
+            import traceback
             print(f"[{question_id}] Error in {variant}: {e}")
+            traceback.print_exc()
             return SolveResult(
                 question_id=question_id,
                 variant=variant,
@@ -287,19 +336,44 @@ REASONING: [brief explanation based on guidelines]"""
             {"role": "user", "content": f"Question: {question}\n\nOptions:\n{options_text}"}
         ]
 
-        response = self._call_llm(messages)
+        response, usage = self._call_llm(messages, max_tokens=512)
         answer, confidence, reasoning = self._parse_direct_response(response)
+
+        # Handle correct_answer: if it's text (not letter), map to letter
+        final_correct = correct_answer
+        is_correct = False
+        if answer:
+            # Check if correct_answer is already a letter
+            if correct_answer.upper() in ["A", "B", "C", "D", "E"]:
+                final_correct = correct_answer.upper()
+                is_correct = (answer.upper() == final_correct)
+            else:
+                # correct_answer is text - check if predicted matches any option
+                is_correct = (answer.upper() == correct_answer.upper())
 
         return SolveResult(
             question_id=question_id,
             variant="V0",
             predicted_answer=answer,
-            correct_answer=correct_answer,
-            is_correct=answer == correct_answer if answer else False,
-            is_valid=answer in ["A", "B", "C", "D"] if answer else False,
+            correct_answer=final_correct,
+            is_correct=is_correct,
+            is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
+            latency_seconds=usage["latency"],
+            total_tokens=usage["total_tokens"],
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
             reasoning=reasoning,
-            metadata={"method": "direct_llm"}
+            metadata={
+                "method": "direct_llm",
+                "rag_trace": None,
+                "planner_trace": None,
+                "examiner_trace": None,
+                "evaluator_trace": None,
+                "rag_used": False,
+                "agents_used": False,
+                "usage_breakdown": {"llm": {"total_tokens": usage["total_tokens"], "prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "latency": usage["latency"]}}
+            }
         )
 
     # =========================================================================
@@ -339,8 +413,14 @@ Options:
 {options_text}"""}
         ]
 
-        response = self._call_llm(messages)
+        response, usage = self._call_llm(messages)
         answer, confidence, reasoning = self._parse_direct_response(response)
+
+        # Build RAG trace
+        rag_trace = {"top_k": top_k, "two_step_retrieval": use_two_step}
+        if use_two_step:
+            keywords = self.rag.extract_keywords(question, max_keywords=3)
+            rag_trace["keywords"] = keywords
 
         return SolveResult(
             question_id=question_id,
@@ -348,13 +428,24 @@ Options:
             predicted_answer=answer,
             correct_answer=correct_answer,
             is_correct=answer == correct_answer if answer else False,
-            is_valid=answer in ["A", "B", "C", "D"] if answer else False,
+            is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=reasoning,
+            latency_seconds=usage["latency"],
+            total_tokens=usage["total_tokens"],
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
             metadata={
                 "method": "rag_direct_llm",
-                "top_k": top_k,
-                "two_step_retrieval": use_two_step
+                "rag_trace": rag_trace,
+                "planner_trace": None,
+                "examiner_trace": None,
+                "evaluator_trace": None,
+                "guidelines_preview": guidelines[:500] if guidelines else None,
+                "rag_used": True,
+                "agents_used": False,
+                "two_step_retrieval": use_two_step,
+                "usage_breakdown": {"llm": {"total_tokens": usage["total_tokens"], "prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "latency": usage["latency"]}}
             }
         )
 
@@ -378,29 +469,76 @@ Options:
               (" [Two-step]" if use_two_step else ""))
 
         # Get guidelines (standard RAG or Two-step)
+        guidelines_supplied = guidelines is not None
+        total_start = time.perf_counter()
+        retrieval_start = time.perf_counter()
         guidelines = self._get_guidelines(
             question, options, guidelines, top_k, use_two_step, book_names
         )
+        retrieval_latency = time.perf_counter() - retrieval_start
 
         # Clear examiner memory
         self.examiner.clear_memory()
 
         # Create plan
+        planner_start = time.perf_counter()
         plan = self.planner.create_plan(question, options, guidelines)
+        planner_latency = time.perf_counter() - planner_start
 
         # Examine WITHOUT memory persistence
         # (each step would clear, but we run full examination)
+        examiner_start = time.perf_counter()
         result = self.examiner.examine(
             question, options, guidelines, plan, use_memory=False
         )
+        examiner_latency = time.perf_counter() - examiner_start
 
         # Evaluate (with cleared memory)
+        evaluator_start = time.perf_counter()
         verification = self.evaluator.evaluate(
             question, options, guidelines, result
         )
+        evaluator_latency = time.perf_counter() - evaluator_start
+        total_latency = time.perf_counter() - total_start
+        latency_breakdown = {
+            "retrieval": retrieval_latency,
+            "planner": planner_latency,
+            "examiner": examiner_latency,
+            "evaluator": evaluator_latency,
+            "total": total_latency,
+        }
 
         answer = result.get("final_answer")
         confidence = result.get("confidence", 0.5)
+
+        # Build comprehensive trace
+        rag_trace = {
+            "top_k": top_k,
+            "two_step_retrieval": use_two_step,
+            "guidelines_supplied": guidelines_supplied,
+        }
+        if use_two_step and not guidelines_supplied:
+            keywords = self.rag.extract_keywords(question, max_keywords=3)
+            rag_trace["keywords"] = keywords
+        elif use_two_step:
+            rag_trace["keywords"] = []
+
+        planner_trace = {
+            "total_steps": len(plan),
+            "steps": [s.to_dict() if hasattr(s, 'to_dict') else s for s in plan]
+        }
+
+        evaluator_trace = {
+            "status": verification.status.value,
+            "confidence": verification.confidence,
+            "feedback": verification.feedback,
+            "cycles": 1
+        }
+
+        # Collect usage from all agents
+        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
+        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
+        evaluator_usage = {"total_tokens": self.evaluator.total_tokens, "prompt_tokens": self.evaluator.prompt_tokens, "completion_tokens": self.evaluator.completion_tokens, "latency": self.evaluator.total_latency}
 
         return SolveResult(
             question_id=question_id,
@@ -408,15 +546,32 @@ Options:
             predicted_answer=answer,
             correct_answer=correct_answer,
             is_correct=answer == correct_answer if answer else False,
-            is_valid=answer in ["A", "B", "C", "D"] if answer else False,
+            is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=self.examiner.get_trace(),
+            latency_seconds=total_latency,
+            total_tokens=planner_usage["total_tokens"] + examiner_usage["total_tokens"] + evaluator_usage["total_tokens"],
+            prompt_tokens=planner_usage["prompt_tokens"] + examiner_usage["prompt_tokens"] + evaluator_usage["prompt_tokens"],
+            completion_tokens=planner_usage["completion_tokens"] + examiner_usage["completion_tokens"] + evaluator_usage["completion_tokens"],
             metadata={
                 "method": "multi_agent_no_memory",
-                "plan_steps": len(plan),
-                "verification_status": verification.status.value,
-                "evaluator_confidence": verification.confidence,
-                "two_step_retrieval": use_two_step
+                "rag_trace": rag_trace,
+                "planner_trace": planner_trace,
+                "examiner_trace": {
+                    "memory_steps": len(result.get("reasoning_steps", [])),
+                    "option_analysis": result.get("option_analysis", {})
+                },
+                "evaluator_trace": evaluator_trace,
+                "guidelines_preview": guidelines[:500] if guidelines else None,
+                "rag_used": True,
+                "agents_used": True,
+                "two_step_retrieval": use_two_step,
+                "latency_breakdown_seconds": latency_breakdown,
+                "usage_breakdown": {
+                    "planner": planner_usage,
+                    "examiner": examiner_usage,
+                    "evaluator": evaluator_usage
+                }
             }
         )
 
@@ -439,6 +594,11 @@ Options:
         print(f"[{question_id}] V3: Full system (with memory)" +
               (" [Two-step]" if use_two_step else ""))
 
+        # A MedQA question is an independent benchmark unit. Keep memory for
+        # its revision cycles, but never carry it into the next question.
+        self.examiner.clear_memory()
+        self.evaluator.clear_history()
+
         # Get guidelines (standard RAG or Two-step)
         guidelines = self._get_guidelines(
             question, options, guidelines, top_k, use_two_step, book_names
@@ -448,21 +608,51 @@ Options:
         plan = self.planner.create_plan(question, options, guidelines)
 
         # Examine WITH memory
-        result = self.examiner.examine(
-            question, options, guidelines, plan, use_memory=True
+        def examine_fn(q, o, g, feedback=None, corrections=None, prev_result=None):
+            return self.examiner.examine(
+                q, o, g, plan, use_memory=True,
+                feedback=feedback,
+                corrections=corrections,
+                prev_result=prev_result,
+            )
+
+        # Run Examiner-Evaluator revision loop (max 2 cycles)
+        final_result = self.evaluator.verify_with_iteration(
+            question=question,
+            options=options,
+            guidelines=guidelines,
+            examine_fn=examine_fn,
+            max_cycles=2
         )
 
-        # Evaluate with memory trace
-        verification = self.evaluator.evaluate(
-            question, options, guidelines, result
-        )
+        # Get final result from revision loop
+        verification = self.evaluator.evaluation_history[-1] if self.evaluator.evaluation_history else None
+        answer = final_result.get("final_answer")
+        confidence = final_result.get("confidence", 0.5)
 
-        answer = result.get("final_answer")
-        confidence = result.get("confidence", 0.5)
+        # Build comprehensive trace
+        rag_trace = {"top_k": top_k, "two_step_retrieval": use_two_step}
+        if use_two_step:
+            keywords = self.rag.extract_keywords(question, max_keywords=3)
+            rag_trace["keywords"] = keywords
 
-        # Adjust confidence based on verification
-        if verification.status != EvaluationStatus.COMPLETE:
-            confidence *= verification.confidence
+        planner_trace = {
+            "total_steps": len(plan),
+            "steps": [s.to_dict() if hasattr(s, 'to_dict') else s for s in plan]
+        }
+
+        evaluator_trace = {
+            "status": verification.status.value if verification else "unknown",
+            "confidence": verification.confidence if verification else 0.0,
+            "feedback": verification.feedback if verification else "",
+            "cycles": len(self.evaluator.evaluation_history),
+            "history": [v.to_dict() for v in self.evaluator.evaluation_history]
+        }
+
+        # Collect usage from all agents
+        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
+        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
+        evaluator_usage = {"total_tokens": self.evaluator.total_tokens, "prompt_tokens": self.evaluator.prompt_tokens, "completion_tokens": self.evaluator.completion_tokens, "latency": self.evaluator.total_latency}
 
         return SolveResult(
             question_id=question_id,
@@ -470,17 +660,31 @@ Options:
             predicted_answer=answer,
             correct_answer=correct_answer,
             is_correct=answer == correct_answer if answer else False,
-            is_valid=answer in ["A", "B", "C", "D"] if answer else False,
+            is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=self.examiner.get_trace(),
+            latency_seconds=planner_usage["latency"] + examiner_usage["latency"] + evaluator_usage["latency"],
+            total_tokens=planner_usage["total_tokens"] + examiner_usage["total_tokens"] + evaluator_usage["total_tokens"],
+            prompt_tokens=planner_usage["prompt_tokens"] + examiner_usage["prompt_tokens"] + evaluator_usage["prompt_tokens"],
+            completion_tokens=planner_usage["completion_tokens"] + examiner_usage["completion_tokens"] + evaluator_usage["completion_tokens"],
             metadata={
                 "method": "full_multi_agent",
-                "plan_steps": len(plan),
-                "memory_steps": len(self.examiner.get_memory()),
-                "verification_status": verification.status.value,
-                "evaluator_confidence": verification.confidence,
-                "evaluation_feedback": verification.feedback,
-                "two_step_retrieval": use_two_step
+                "rag_trace": rag_trace,
+                "planner_trace": planner_trace,
+                "examiner_trace": {
+                    "memory_steps": len(final_result.get("reasoning_steps", [])),
+                    "option_analysis": final_result.get("option_analysis", {})
+                },
+                "evaluator_trace": evaluator_trace,
+                "guidelines_preview": guidelines[:500] if guidelines else None,
+                "rag_used": True,
+                "agents_used": True,
+                "two_step_retrieval": use_two_step,
+                "usage_breakdown": {
+                    "planner": planner_usage,
+                    "examiner": examiner_usage,
+                    "evaluator": evaluator_usage
+                }
             }
         )
 
@@ -520,21 +724,53 @@ Options:
         answer = result.get("final_answer")
         confidence = result.get("confidence", 0.5)
 
+        # Build comprehensive trace
+        rag_trace = {"top_k": top_k, "two_step_retrieval": use_two_step}
+        if use_two_step:
+            keywords = self.rag.extract_keywords(question, max_keywords=3)
+            rag_trace["keywords"] = keywords
+
+        planner_trace = {
+            "total_steps": len(plan),
+            "steps": [s.to_dict() if hasattr(s, 'to_dict') else s for s in plan]
+        }
+
+        # Collect usage from all agents
+        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
+        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
+        evaluator_usage = None
+
         return SolveResult(
             question_id=question_id,
             variant="V4",
             predicted_answer=answer,
             correct_answer=correct_answer,
             is_correct=answer == correct_answer if answer else False,
-            is_valid=answer in ["A", "B", "C", "D"] if answer else False,
+            is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=self.examiner.get_trace(),
+            latency_seconds=planner_usage["latency"] + examiner_usage["latency"],
+            total_tokens=planner_usage["total_tokens"] + examiner_usage["total_tokens"],
+            prompt_tokens=planner_usage["prompt_tokens"] + examiner_usage["prompt_tokens"],
+            completion_tokens=planner_usage["completion_tokens"] + examiner_usage["completion_tokens"],
             metadata={
                 "method": "full_no_evaluator",
-                "plan_steps": len(plan),
-                "memory_steps": len(self.examiner.get_memory()),
-                "evaluation_skipped": True,
-                "two_step_retrieval": use_two_step
+                "rag_trace": rag_trace,
+                "planner_trace": planner_trace,
+                "examiner_trace": {
+                    "memory_steps": len(result.get("reasoning_steps", [])),
+                    "option_analysis": result.get("option_analysis", {})
+                },
+                "evaluator_trace": None,
+                "guidelines_preview": guidelines[:500] if guidelines else None,
+                "rag_used": True,
+                "agents_used": True,
+                "two_step_retrieval": use_two_step,
+                "usage_breakdown": {
+                    "planner": planner_usage,
+                    "examiner": examiner_usage,
+                    "evaluator": evaluator_usage
+                }
             }
         )
 
@@ -572,18 +808,29 @@ Options:
         # Standard RAG
         return self.rag.get_relevant_context(question, options_list, top_k)
 
-    def _call_llm(self, messages: List[Dict], temperature: float = 0.3) -> str:
-        """Call the LLM and return the response."""
-        call_kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": 512
+    def _call_llm(self, messages: List[Dict], temperature: float = 0.3, max_tokens: int = 512) -> tuple:
+        """Call the LLM and return (response, usage_dict)."""
+        import time
+        start = time.time()
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        latency = time.time() - start
+        usage = response.usage
+        return response.choices[0].message.content, {
+            "latency": latency,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens
         }
-        if self.api_base:
-            call_kwargs["base_url"] = self.api_base
-        response = openai.ChatCompletion.create(**call_kwargs)
-        return response.choices[0].message.content
+
+    def _call_llm_text(self, messages: List[Dict], temperature: float = 0.3, max_tokens: int = 512) -> str:
+        """Call the LLM and return just the response text (backward compatible)."""
+        response, _ = self._call_llm(messages, temperature, max_tokens)
+        return response
 
     def _parse_direct_response(self, response: str) -> tuple:
         """Parse V0/V1 direct response into answer, confidence, reasoning."""
@@ -595,7 +842,11 @@ Options:
         for line in response.split("\n"):
             line = line.strip()
             if line.startswith("ANSWER:"):
-                answer = line.split("ANSWER:")[1].strip()[0].upper()
+                # Handle formats like "ANSWER: A" or "ANSWER: [A]"
+                ans_part = line.split("ANSWER:")[1].strip()
+                # Remove brackets if present
+                ans_part = ans_part.strip("[]")
+                answer = ans_part[0].upper()
             elif line.startswith("CONF:"):
                 try:
                     confidence = float(line.split("CONF:")[1].strip())
@@ -604,9 +855,9 @@ Options:
             elif line.startswith("REASONING:"):
                 reasoning = line.split("REASONING:")[1].strip()
 
-        # Fallback: try to find A/B/C/D in response
+        # Fallback: try to find A/B/C/D/E in response
         if not answer:
-            for char in ["A", "B", "C", "D"]:
+            for char in ["A", "B", "C", "D", "E"]:
                 if char in response.upper():
                     answer = char
                     break

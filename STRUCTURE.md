@@ -4,37 +4,95 @@
 
 ---
 
+## ⚠️ Important: `.env` Location
+
+The `.env` file is at **`medqa_rag/.env`** (inside the package directory). Scripts in the project root need it copied to root:
+
+```bash
+cp medqa_rag/.env .env
+```
+
+---
+
 ## 📁 Directory Structure
 
 ```
-medqa_rag/
+MedAgentPro/                        # Project root
 │
-├── __init__.py                     # Package root exports (v2.0.0)
-├── config.py                       # Environment / .env loader
-├── .env.example                    # Template for API keys & endpoint
-├── .env                            # Local secrets (gitignored)
+├── .env                            # API keys (copied from medqa_rag/.env)
+├── venv/                           # Python virtual environment
 │
-├── core/                           # ⚙️ System orchestration
-│   ├── __init__.py
-│   └── system.py                   #   MedQASystem + 5-variant routing (V0-V4)
+├── resume_v1.py                    # V1 benchmark runner (auto-resume from checkpoint)
+├── run_v2.py                       # V2 benchmark runner
+├── run_v3.py                       # V3 benchmark runner
+├── run_v4.py                       # V4 benchmark runner
 │
-├── agents/                         # 🤖 Multi-agent components
-│   ├── __init__.py
-│   ├── planner.py                  #   MedQA_Planner — reasoning plan generator
-│   ├── examiner.py                 #   MedQA_Examiner — plan executor + short-term memory
-│   └── evaluator.py                #   MedQA_Evaluator — reasoning verifier
+├── results_V1/                     # V1 results
+├── results_V2/                     # V2 results
+├── results_V3/                     # V3 results
+├── results_V4/                     # V4 results
 │
-├── rag/                            # 🔍 Retrieval-Augmented Generation
-│   ├── __init__.py
-│   ├── retriever.py                #   MedQA_RAG — ChromaDB + Two-step Retrieval
-│   └── data_loader.py              #   MedQALoader — MedQA dataset utilities
-│
-├── evaluation/                     # 📊 Benchmark & evaluation
-│   ├── __init__.py
-│   └── runner.py                   #   MedQAEvaluator — 5-variant benchmark on 1273 questions
-│
-└── scripts/                        # 🛠️ Standalone utilities
-    └── ingest_sample_data.py       #   Sample medical-text ingestion helper
+└── medqa_rag/                      # Package root
+    ├── __init__.py                 #   Package root exports (v2.0.0)
+    ├── config.py                   #   Environment / .env loader
+    ├── .env                        #   Local secrets (gitignored)
+    │
+    ├── core/                       #   ⚙️ System orchestration
+    │   └── system.py               #     MedQASystem + 5-variant routing (V0-V4)
+    │
+    ├── agents/                     #   🤖 Multi-agent components
+    │   ├── planner.py              #     MedQA_Planner — reasoning plan generator
+    │   ├── examiner.py             #     MedQA_Examiner — plan executor + short-term memory
+    │   └── evaluator.py            #     MedQA_Evaluator — reasoning verifier
+    │
+    ├── rag/                        #   🔍 Retrieval-Augmented Generation
+    │   ├── retriever.py            #     MedQA_RAG — ChromaDB + Two-step Retrieval
+    │   └── data_loader.py          #     MedQALoader — MedQA dataset utilities
+    │
+    ├── evaluation/                 #   📊 Benchmark & evaluation
+    │   └── runner.py               #     MedQAEvaluator — 5-variant benchmark
+    │
+    └── scripts/                    #   🛠️ Standalone utilities
+        └── ingest_sample_data.py   #     Sample medical-text ingestion
+```
+
+---
+
+## 📊 Benchmark Results
+
+| Variant | Accuracy | Status | Duration |
+|---------|:--------:|--------|----------|
+| **V1** | 92.6% | ✅ Completed | 26.7 min |
+| **V2** | TBD | 🔄 Running | ~15h ETA |
+| **V3** | TBD | ⏳ Pending | ~TBD |
+| **V4** | TBD | ⏳ Pending | ~TBD |
+
+**V1**: 1179/1273 correct, 0 errors. Dataset: MedQA-USMLE (1273 questions).
+
+### Running Benchmarks
+
+```bash
+cd /Users/mac/Developers/MedQA_RAG/MedAgentPro
+
+# Copy .env if not already at root
+cp medqa_rag/.env .env
+
+# V1 — RAG + LLM (26 min)
+nohup venv/bin/python resume_v1.py > run_v1.log 2>&1 &
+
+# V2 — Multi-agent (ETA ~15h)
+nohup venv/bin/python run_v2.py > run_v2.log 2>&1 &
+
+# V3 — Full system
+nohup venv/bin/python run_v3.py > run_v3.log 2>&1 &
+
+# V4 — V3 no evaluator
+nohup venv/bin/python run_v4.py > run_v4.log 2>&1 &
+```
+
+Scripts auto-resume from checkpoint if interrupted. Check progress:
+```bash
+tail -f run_v2.log   # or run_v3.log, etc.
 ```
 
 ---

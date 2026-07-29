@@ -23,7 +23,7 @@ The Examiner outputs:
 
 import os
 import json
-import openai
+from openai import OpenAI
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -111,7 +111,7 @@ Return a JSON object with this structure:
 }
 
 IMPORTANT:
-- final_answer must be a single letter (A, B, C, or D)
+- final_answer must be a single letter matching one of the provided options (A, B, C, D, E, etc.)
 - confidence is 0.0 to 1.0
 - If you cannot determine the answer, say "final_answer": null
 - All eliminated options must have is_correct=false
@@ -129,9 +129,7 @@ IMPORTANT:
         """
         self.api_key = api_key
         self.api_base = api_base
-        openai.api_key = api_key
-        if api_base:
-            openai.api_base = api_base
+        self._client = OpenAI(api_key=api_key, base_url=api_base) if api_base else OpenAI(api_key=api_key)
         self.model = model
 
         # Short-term memory: stores all intermediate reasoning
@@ -139,6 +137,11 @@ IMPORTANT:
         self.option_analysis: Dict[str, OptionAnalysis] = {}
         self.final_answer: Optional[str] = None
         self.confidence: float = 0.5
+        # Usage tracking
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_latency = 0.0
 
     def clear_memory(self) -> None:
         """Clear short-term memory (used for V2 ablation variant)."""
@@ -153,7 +156,10 @@ IMPORTANT:
         options: Dict[str, str],
         guidelines: str,
         plan: Optional[List[Dict]] = None,
-        include_memory: bool = True
+        include_memory: bool = True,
+        feedback: Optional[str] = None,
+        corrections: Optional[List[str]] = None,
+        prev_result: Optional[Dict] = None
     ) -> List[Dict[str, str]]:
         """
         Build the messages for the LLM.
@@ -194,6 +200,17 @@ PREVIOUS REASONING (Short-term Memory):
 """
             for result in self.memory:
                 user_content += f"Step {result.step_id}: {result.action_type} - {result.finding}\n"
+            user_content += "---\n"
+
+        if feedback:
+            user_content += f"""---
+EVALUATOR FEEDBACK (Revise Required):
+{feedback}
+"""
+            if corrections:
+                user_content += f"\nSuggested corrections:\n"
+                for corr in corrections:
+                    user_content += f"  - {corr}\n"
             user_content += "---\n"
 
         messages = [
@@ -280,7 +297,7 @@ Provide your reasoning and findings for this step.
             {"role": "user", "content": user_content}
         ]
 
-        response = openai.ChatCompletion.create(
+        response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=0.3,
@@ -304,7 +321,10 @@ Provide your reasoning and findings for this step.
         guidelines: str,
         plan: Optional[List] = None,
         use_memory: bool = True,
-        max_retries: int = 3
+        max_retries: int = 3,
+        feedback: Optional[str] = None,
+        corrections: Optional[List[str]] = None,
+        prev_result: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Perform complete examination of a MedQA question.
@@ -316,6 +336,9 @@ Provide your reasoning and findings for this step.
             plan: Optional reasoning plan
             use_memory: Whether to maintain short-term memory
             max_retries: Number of retries on failure
+            feedback: Evaluator feedback for revision (optional)
+            corrections: Suggested corrections from Evaluator (optional)
+            prev_result: Previous examination result (optional)
 
         Returns:
             Dict with reasoning_steps, option_analysis, final_answer, confidence
@@ -324,23 +347,36 @@ Provide your reasoning and findings for this step.
         if not use_memory:
             self.clear_memory()
 
-        # Build prompt
+        # Build prompt with optional evaluator feedback
         messages = self._build_prompt(
             question, options, guidelines, plan,
-            include_memory=use_memory and bool(self.memory)
+            include_memory=use_memory and bool(self.memory),
+            feedback=feedback,
+            corrections=corrections,
+            prev_result=prev_result
         )
 
+        import time
         for attempt in range(max_retries):
             try:
-                response = openai.ChatCompletion.create(
+                start = time.time()
+                response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=0.3,
                     max_tokens=2048
                 )
+                latency = time.time() - start
 
                 raw_output = response.choices[0].message.content
                 result = self._parse_response(raw_output)
+
+                # Track usage
+                usage = response.usage
+                self.total_tokens += usage.total_tokens
+                self.prompt_tokens += usage.prompt_tokens
+                self.completion_tokens += usage.completion_tokens
+                self.total_latency += latency
 
                 # Update state
                 if "reasoning_steps" in result:
@@ -371,7 +407,7 @@ Provide your reasoning and findings for this step.
                 self.confidence = result.get("confidence", 0.5)
 
                 return {
-                    "reasoning_steps": self.memory.copy() if use_memory else [],
+                    "reasoning_steps": [s.to_dict() for s in self.memory] if use_memory else [],
                     "option_analysis": {k: v.to_dict() for k, v in self.option_analysis.items()},
                     "final_answer": self.final_answer,
                     "confidence": self.confidence,

@@ -34,6 +34,7 @@ class RAGConfig:
     embedding_model: str = "text-embedding-3-small"
     use_huggingface: bool = False
     hf_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    hf_token: Optional[str] = None
 
 
 @dataclass
@@ -91,6 +92,7 @@ class Config:
                 embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
                 use_huggingface=os.environ.get("USE_HUGGINGFACE", "false").lower() == "true",
                 hf_model_name=os.environ.get("HF_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"),
+                hf_token=os.environ.get("HF_TOKEN"),
             )
         return self._rag
 
@@ -128,9 +130,21 @@ def load_config(env_file: Optional[str] = None) -> None:
         if env_file:
             load_dotenv(env_file)
         else:
-            env_path = find_dotenv(us_cwd=True)
+            # Try to find .env in current directory or parent directories
+            env_path = find_dotenv()
             if env_path:
                 load_dotenv(env_path)
+            else:
+                # Try common locations relative to this file
+                import pathlib
+                # Try medqa_rag/.env (this package's directory)
+                pkg_dir = pathlib.Path(__file__).parent
+                local_env = pkg_dir / ".env"
+                if local_env.exists():
+                    load_dotenv(local_env)
+                else:
+                    # Try cwd
+                    load_dotenv("./.env")
     _config._loaded = True
 
 

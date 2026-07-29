@@ -23,7 +23,7 @@ The Evaluator outputs:
 
 import os
 import json
-import openai
+from openai import OpenAI
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -117,17 +117,24 @@ IMPORTANT:
         """
         self.api_key = api_key
         self.api_base = api_base
-        openai.api_key = api_key
-        if api_base:
-            openai.api_base = api_base
+        self._client = OpenAI(api_key=api_key, base_url=api_base) if api_base else OpenAI(api_key=api_key)
         self.model = model
 
         # Verification history
         self.evaluation_history: List[VerificationResult] = []
+        # Usage tracking
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_latency = 0.0
 
     def clear_history(self) -> None:
         """Clear verification history."""
         self.evaluation_history = []
+        self.total_tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_latency = 0.0
 
     def _build_prompt(
         self,
@@ -252,16 +259,26 @@ EXAMINER'S CONFIDENCE: {examiner_result.get('confidence', 'Not specified')}
             previous_evaluations
         )
 
+        import time
         try:
-            response = openai.ChatCompletion.create(
+            start = time.time()
+            response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.2,
                 max_tokens=1024
             )
+            latency = time.time() - start
 
             raw_output = response.choices[0].message.content
             result = self._parse_response(raw_output)
+
+            # Track usage
+            usage = response.usage
+            self.total_tokens += usage.total_tokens
+            self.prompt_tokens += usage.prompt_tokens
+            self.completion_tokens += usage.completion_tokens
+            self.total_latency += latency
 
             # Map status string to enum
             status_str = result.get("status", "Continue").strip().capitalize()
@@ -324,7 +341,6 @@ EXAMINER'S CONFIDENCE: {examiner_result.get('confidence', 'Not specified')}
 
         # Evaluate
         verification = self.evaluate(question, options, guidelines, examiner_result)
-        self.evaluation_history.append(verification)
 
         # Iterative refinement
         for cycle in range(2, max_cycles + 1):
@@ -360,7 +376,6 @@ EXAMINER'S CONFIDENCE: {examiner_result.get('confidence', 'Not specified')}
                     question, options, guidelines, examiner_result,
                     previous_evaluations=prev_evals
                 )
-                self.evaluation_history.append(verification)
 
         # Final evaluation summary
         final_result["evaluation"] = {
