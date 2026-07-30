@@ -486,12 +486,14 @@ Options:
         self.examiner.clear_memory()
 
         # Create plan
+        planner_before = self._usage_snapshot(self.planner)
         planner_start = time.perf_counter()
         plan = self.planner.create_plan(question, options, guidelines)
         planner_latency = time.perf_counter() - planner_start
 
         # Examine WITHOUT memory persistence
         # (each step would clear, but we run full examination)
+        examiner_before = self._usage_snapshot(self.examiner)
         examiner_start = time.perf_counter()
         result = self.examiner.examine(
             question, options, guidelines, plan, use_memory=False
@@ -499,6 +501,7 @@ Options:
         examiner_latency = time.perf_counter() - examiner_start
 
         # Evaluate (with cleared memory)
+        evaluator_before = self._usage_snapshot(self.evaluator)
         evaluator_start = time.perf_counter()
         verification = self.evaluator.evaluate(
             question, options, guidelines, result
@@ -513,7 +516,7 @@ Options:
             "total": total_latency,
         }
 
-        answer = result.get("final_answer")
+        answer, fallback_answer_used = self._valid_answer_or_fallback(result, options)
         confidence = result.get("confidence", 0.5)
 
         # Build comprehensive trace
@@ -540,10 +543,10 @@ Options:
             "cycles": 1
         }
 
-        # Collect usage from all agents
-        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
-        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
-        evaluator_usage = {"total_tokens": self.evaluator.total_tokens, "prompt_tokens": self.evaluator.prompt_tokens, "completion_tokens": self.evaluator.completion_tokens, "latency": self.evaluator.total_latency}
+        # Store only this request's usage, never the cumulative worker counters.
+        planner_usage = self._usage_delta(self.planner, planner_before)
+        examiner_usage = self._usage_delta(self.examiner, examiner_before)
+        evaluator_usage = self._usage_delta(self.evaluator, evaluator_before)
 
         return SolveResult(
             question_id=question_id,
@@ -571,6 +574,7 @@ Options:
                 "rag_used": True,
                 "agents_used": True,
                 "two_step_retrieval": use_two_step,
+                "fallback_answer_used": fallback_answer_used,
                 "latency_breakdown_seconds": latency_breakdown,
                 "usage_breakdown": {
                     "planner": planner_usage,
@@ -604,15 +608,22 @@ Options:
         self.examiner.clear_memory()
         self.evaluator.clear_history()
 
+        total_start = time.perf_counter()
+        retrieval_start = time.perf_counter()
         # Get guidelines (standard RAG or Two-step)
         guidelines = self._get_guidelines(
             question, options, guidelines, top_k, use_two_step, book_names
         )
+        retrieval_latency = time.perf_counter() - retrieval_start
 
         # Create plan
+        planner_before = self._usage_snapshot(self.planner)
         plan = self.planner.create_plan(question, options, guidelines)
+        planner_usage = self._usage_delta(self.planner, planner_before)
 
         # Examine WITH memory
+        examiner_before = self._usage_snapshot(self.examiner)
+        evaluator_before = self._usage_snapshot(self.evaluator)
         def examine_fn(q, o, g, feedback=None, corrections=None, prev_result=None):
             return self.examiner.examine(
                 q, o, g, plan, use_memory=True,
@@ -632,8 +643,19 @@ Options:
 
         # Get final result from revision loop
         verification = self.evaluator.evaluation_history[-1] if self.evaluator.evaluation_history else None
-        answer = final_result.get("final_answer")
+        answer, fallback_answer_used = self._valid_answer_or_fallback(final_result, options)
         confidence = final_result.get("confidence", 0.5)
+
+        examiner_usage = self._usage_delta(self.examiner, examiner_before)
+        evaluator_usage = self._usage_delta(self.evaluator, evaluator_before)
+        total_latency = time.perf_counter() - total_start
+        latency_breakdown = {
+            "retrieval": retrieval_latency,
+            "planner": planner_usage["latency"],
+            "examiner": examiner_usage["latency"],
+            "evaluator": evaluator_usage["latency"],
+            "total": total_latency,
+        }
 
         # Build comprehensive trace
         rag_trace = {"top_k": top_k, "two_step_retrieval": use_two_step}
@@ -654,11 +676,6 @@ Options:
             "history": [v.to_dict() for v in self.evaluator.evaluation_history]
         }
 
-        # Collect usage from all agents
-        planner_usage = {"total_tokens": self.planner.total_tokens, "prompt_tokens": self.planner.prompt_tokens, "completion_tokens": self.planner.completion_tokens, "latency": self.planner.total_latency}
-        examiner_usage = {"total_tokens": self.examiner.total_tokens, "prompt_tokens": self.examiner.prompt_tokens, "completion_tokens": self.examiner.completion_tokens, "latency": self.examiner.total_latency}
-        evaluator_usage = {"total_tokens": self.evaluator.total_tokens, "prompt_tokens": self.evaluator.prompt_tokens, "completion_tokens": self.evaluator.completion_tokens, "latency": self.evaluator.total_latency}
-
         return SolveResult(
             question_id=question_id,
             variant="V3",
@@ -668,7 +685,7 @@ Options:
             is_valid=answer in ["A", "B", "C", "D", "E"] if answer else False,
             confidence=confidence,
             reasoning=self.examiner.get_trace(),
-            latency_seconds=planner_usage["latency"] + examiner_usage["latency"] + evaluator_usage["latency"],
+            latency_seconds=total_latency,
             total_tokens=planner_usage["total_tokens"] + examiner_usage["total_tokens"] + evaluator_usage["total_tokens"],
             prompt_tokens=planner_usage["prompt_tokens"] + examiner_usage["prompt_tokens"] + evaluator_usage["prompt_tokens"],
             completion_tokens=planner_usage["completion_tokens"] + examiner_usage["completion_tokens"] + evaluator_usage["completion_tokens"],
@@ -685,6 +702,8 @@ Options:
                 "rag_used": True,
                 "agents_used": True,
                 "two_step_retrieval": use_two_step,
+                "fallback_answer_used": fallback_answer_used,
+                "latency_breakdown_seconds": latency_breakdown,
                 "usage_breakdown": {
                     "planner": planner_usage,
                     "examiner": examiner_usage,
@@ -755,7 +774,7 @@ Options:
         }
 
         # Skip evaluation - take examiner's answer directly
-        answer = result.get("final_answer")
+        answer, fallback_answer_used = self._valid_answer_or_fallback(result, options)
         confidence = result.get("confidence", 0.5)
 
         # Build comprehensive trace
@@ -815,6 +834,7 @@ Options:
                 "rag_used": True,
                 "agents_used": True,
                 "two_step_retrieval": use_two_step,
+                "fallback_answer_used": fallback_answer_used,
                 "latency_breakdown_seconds": latency_breakdown,
                 "usage_breakdown": {
                     "planner": planner_usage,
@@ -827,6 +847,48 @@ Options:
     # =========================================================================
     # Utility Methods
     # =========================================================================
+
+    @staticmethod
+    def _usage_snapshot(agent: Any) -> Dict[str, float]:
+        """Capture an agent's cumulative counters before one question."""
+        return {
+            "total_tokens": float(agent.total_tokens),
+            "prompt_tokens": float(agent.prompt_tokens),
+            "completion_tokens": float(agent.completion_tokens),
+            "latency": float(agent.total_latency),
+        }
+
+    @staticmethod
+    def _usage_delta(agent: Any, before: Dict[str, float]) -> Dict[str, Any]:
+        """Return the token and latency increments attributable to one question."""
+        return {
+            "total_tokens": int(agent.total_tokens - before["total_tokens"]),
+            "prompt_tokens": int(agent.prompt_tokens - before["prompt_tokens"]),
+            "completion_tokens": int(agent.completion_tokens - before["completion_tokens"]),
+            "latency": float(agent.total_latency - before["latency"]),
+        }
+
+    @staticmethod
+    def _valid_answer_or_fallback(result: Dict[str, Any], options: Dict[str, str]) -> tuple[Optional[str], bool]:
+        """Return a valid option or deterministically recover one from Examiner output."""
+        answer = result.get("final_answer")
+        if answer in options:
+            return answer, False
+
+        option_analysis = result.get("option_analysis") or {}
+        ranked_options = []
+        for position, option_key in enumerate(options):
+            analysis = option_analysis.get(option_key) or {}
+            confidence = analysis.get("confidence", 0.0) if isinstance(analysis, dict) else getattr(analysis, "confidence", 0.0)
+            try:
+                score = float(confidence)
+            except (TypeError, ValueError):
+                score = 0.0
+            ranked_options.append((score, -position, option_key))
+
+        # Options are required for MedQA. The ordered fallback keeps the output
+        # valid even when the Examiner omitted option-level confidences.
+        return max(ranked_options)[2], True
 
     def _get_guidelines(
         self,

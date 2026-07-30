@@ -41,3 +41,39 @@ class V2LatencyTests(unittest.TestCase):
         result = self._system()._solve_v2("Question", {"A": "answer"}, "A", "q1", "cached two-step context", 5, use_two_step=True)
         self.assertTrue(result.metadata["rag_trace"]["guidelines_supplied"])
         self.assertEqual(result.metadata["rag_trace"]["keywords"], [])
+
+    def test_usage_breakdown_contains_only_this_questions_agent_deltas(self):
+        class CountingPlanner(FakePlanner):
+            def create_plan(self, question, options, guidelines):
+                self.total_tokens += 11
+                self.prompt_tokens += 7
+                self.completion_tokens += 4
+                self.total_latency += 1.1
+                return []
+
+        class CountingExaminer(FakeExaminer):
+            def examine(self, question, options, guidelines, plan, use_memory):
+                self.total_tokens += 22
+                self.prompt_tokens += 14
+                self.completion_tokens += 8
+                self.total_latency += 2.2
+                return super().examine(question, options, guidelines, plan, use_memory)
+
+        class CountingEvaluator(FakeEvaluator):
+            def evaluate(self, question, options, guidelines, result):
+                self.total_tokens += 33
+                self.prompt_tokens += 21
+                self.completion_tokens += 12
+                self.total_latency += 3.3
+                return super().evaluate(question, options, guidelines, result)
+
+        system = MedQASystem.__new__(MedQASystem)
+        system._planner, system._examiner, system._evaluator = CountingPlanner(), CountingExaminer(), CountingEvaluator()
+        result = system._solve_v2("Question", {"A": "answer"}, "A", "q1", "cached context", 5)
+
+        self.assertEqual(result.total_tokens, 66)
+        self.assertEqual(result.prompt_tokens, 42)
+        self.assertEqual(result.completion_tokens, 24)
+        self.assertAlmostEqual(result.metadata["usage_breakdown"]["planner"]["latency"], 1.1)
+        self.assertAlmostEqual(result.metadata["usage_breakdown"]["examiner"]["latency"], 2.2)
+        self.assertAlmostEqual(result.metadata["usage_breakdown"]["evaluator"]["latency"], 3.3)
