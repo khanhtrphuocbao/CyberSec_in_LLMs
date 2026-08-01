@@ -29,6 +29,7 @@ from medqa_rag.config import load_config
 from medqa_rag.core.system import MedQASystem
 from medqa_rag.evaluation.v2_benchmark import V4BenchmarkRunner, build_v2_parser
 from medqa_rag.rag.data_loader import MedQALoader
+from medqa_rag.single_question_cli import run_single_question
 
 
 def build_v4_parser():
@@ -36,11 +37,6 @@ def build_v4_parser():
     parser = build_v2_parser()
     parser.description = "Run the resumable V4 MedQA benchmark"
     parser.set_defaults(output_dir="results_V4", cache_file="results_V4/rag_cache.json", workers=2)
-    parser.add_argument(
-        "--api-key-env",
-        default="OPENAI_API_KEY",
-        help="Environment variable containing the API key to dedicate to V4",
-    )
     for action in parser._actions:
         if action.dest == "output_dir":
             action.help = "Directory for results_V4.json"
@@ -52,6 +48,11 @@ def build_v4_parser():
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_v4_parser()
     args = parser.parse_args(argv)
+    if args.question_index is not None:
+        try:
+            return run_single_question(args, "V4")
+        except ValueError as error:
+            parser.error(str(error))
     load_config()
     api_key = os.environ.get(args.api_key_env)
     if not api_key:

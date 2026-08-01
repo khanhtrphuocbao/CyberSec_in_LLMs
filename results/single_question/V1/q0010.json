@@ -1,0 +1,38 @@
+{
+  "question_id": "q0010",
+  "variant": "V1",
+  "predicted_answer": "E",
+  "correct_answer": "E",
+  "is_correct": true,
+  "is_valid": true,
+  "confidence": 0.5,
+  "reasoning": "The confirmatory test after a reactive HIV screening assay is an HIV-1/HIV-2 antibody differentiation immunoassay, which distinguishes HIV-1 from HIV-2 infection. Genotype testing and Northern/Southern blot options are not the standard confirmatory tests.",
+  "metadata": {
+    "method": "rag_direct_llm",
+    "rag_trace": {
+      "top_k": 5,
+      "two_step_retrieval": false
+    },
+    "planner_trace": null,
+    "examiner_trace": null,
+    "evaluator_trace": null,
+    "guidelines_preview": "[Source 1 - unknown]:\nBook Name: Obstentrics_Williams. Section Title: Valacyclovir, 500 mg twice daily from 36 weeks until delivery. Content: Women with undocumented HIV status at delivery should have a fourth-generation HIV antigen/antibody combination screening test performed on a blood sample. A negative screening test result does not need confirmation. However, in cases of recent HIV exposure, consideration is given to peripartum interventions to reduce perinatal transmission despite negativ",
+    "rag_used": true,
+    "agents_used": false,
+    "two_step_retrieval": false,
+    "usage_breakdown": {
+      "llm": {
+        "total_tokens": 6698,
+        "prompt_tokens": 6566,
+        "completion_tokens": 132,
+        "latency": 4.709124803543091
+      }
+    }
+  },
+  "error": null,
+  "latency_seconds": 4.709124803543091,
+  "total_tokens": 6698,
+  "prompt_tokens": 6566,
+  "completion_tokens": 132,
+  "question_index": 10
+}

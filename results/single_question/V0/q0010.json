@@ -1,0 +1,33 @@
+{
+  "question_id": "q0010",
+  "variant": "V0",
+  "predicted_answer": "E",
+  "correct_answer": "E",
+  "is_correct": true,
+  "is_valid": true,
+  "confidence": 0.99,
+  "reasoning": "A reactive rapid HIV screening test is confirmed with an HIV-1/HIV-2 antibody differentiation immunoassay, which distinguishes antibodies against HIV-1 from HIV-2. Western blot confirmation is no longer the recommended standard.",
+  "metadata": {
+    "method": "direct_llm",
+    "rag_trace": null,
+    "planner_trace": null,
+    "examiner_trace": null,
+    "evaluator_trace": null,
+    "rag_used": false,
+    "agents_used": false,
+    "usage_breakdown": {
+      "llm": {
+        "total_tokens": 5591,
+        "prompt_tokens": 5466,
+        "completion_tokens": 125,
+        "latency": 5.675374269485474
+      }
+    }
+  },
+  "error": null,
+  "latency_seconds": 5.675374269485474,
+  "total_tokens": 5591,
+  "prompt_tokens": 5466,
+  "completion_tokens": 125,
+  "question_index": 10
+}

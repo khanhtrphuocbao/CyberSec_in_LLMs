@@ -11,3 +11,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+results_V*/
+results/single_question/
+logs/single_question/
+run_*.log

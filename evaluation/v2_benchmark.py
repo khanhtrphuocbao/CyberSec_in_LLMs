@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ..core.system import MedQASystem
 from ..rag.data_loader import MedQALoader
+from ..single_question_cli import add_single_question_arguments, run_single_question
 
 
 class RAGContextCache:
@@ -309,12 +310,19 @@ def build_v2_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated metadata book filters for two-step retrieval",
     )
+    add_single_question_arguments(parser)
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Run V2 from CLI arguments and return a shell-compatible status code."""
-    args = build_v2_parser().parse_args(argv)
+    parser = build_v2_parser()
+    args = parser.parse_args(argv)
+    if args.question_index is not None:
+        try:
+            return run_single_question(args, "V2")
+        except ValueError as error:
+            parser.error(str(error))
     book_names = args.valid_book_names.split(",") if args.valid_book_names else None
     questions = MedQALoader().load_json(args.data_path)
     runner = V2BenchmarkRunner(

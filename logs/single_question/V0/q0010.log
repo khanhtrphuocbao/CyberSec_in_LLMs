@@ -1,0 +1,6 @@
+Running V0 for index 10 (q0010)
+
+[q0010] Solving with V0...
+[q0010] V0: Direct LLM baseline
+Result: results/single_question/V0/q0010.json
+Log: logs/single_question/V0/q0010.log

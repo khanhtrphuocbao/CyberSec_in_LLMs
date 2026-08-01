@@ -1,0 +1,18 @@
+Running V3 for index 10 (q0010)
+
+[q0010] Solving with V3...
+[q0010] V3: Full system (with memory)
+/Users/mac/Developers/MedQA_RAG/MedAgentPro/medqa_rag/rag/retriever.py:131: LangChainDeprecationWarning: The class `HuggingFaceEmbeddings` was deprecated in LangChain 0.2.2 and will be removed in 1.0. An updated version of the class exists in the `langchain-huggingface package and should be used instead. To use it run `pip install -U `langchain-huggingface` and import as `from `langchain_huggingface import HuggingFaceEmbeddings``.
+  self.embeddings = HuggingFaceEmbeddings(
+Loading weights:   0%|          | 0/134 [00:00<?, ?it/s]Loading weights: 100%|##########| 134/134 [00:00<00:00, 12310.52it/s]
+[RAG] Using HuggingFace embeddings: lokeshch19/ModernPubMedBERT
+/Users/mac/Developers/MedQA_RAG/MedAgentPro/medqa_rag/rag/retriever.py:523: LangChainDeprecationWarning: The class `Chroma` was deprecated in LangChain 0.2.9 and will be removed in 1.0. An updated version of the class exists in the `langchain-chroma package and should be used instead. To use it run `pip install -U `langchain-chroma` and import as `from `langchain_chroma import Chroma``.
+  self.vectorstore = Chroma(
+[RAG] Loaded existing vector store from /Users/mac/Developers/MedQA_RAG/MedQA_ChromaDB_Injected
+[Planner] Created plan with 5 steps
+[Evaluator] Cycle 1: Initial examination
+[Evaluator] Status: Revise, Confidence: 0.94
+[Evaluator] Cycle 2: Need revision, providing feedback
+[Evaluator] Status: Revise, Confidence: 0.96
+Result: results/single_question/V3/q0010.json
+Log: logs/single_question/V3/q0010.log
