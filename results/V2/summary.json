@@ -1,0 +1,26 @@
+{
+  "variant": "V2",
+  "total": 1273,
+  "valid": 1273,
+  "invalid": 0,
+  "errors": 0,
+  "correct": 1175,
+  "incorrect": 98,
+  "accuracy": 0.9230164964650432,
+  "total_tokens": null,
+  "prompt_tokens": null,
+  "completion_tokens": null,
+  "avg_tokens_per_question": null,
+  "token_note": "V2 token counters in results from this benchmark are cumulative per agent/worker, so summing them would overstate token usage.",
+  "total_latency_seconds": 116049.56401619324,
+  "avg_latency_seconds": 91.16226552725314,
+  "latency_breakdown_coverage": 1233,
+  "latency_breakdown_seconds": {
+    "retrieval": 78.34381472595211,
+    "planner": 25846.082016939297,
+    "examiner": 32479.78077991656,
+    "evaluator": 21458.05436748499
+  },
+  "total_time_seconds": null,
+  "total_time_note": "Wall-clock time cannot be reconstructed from results after resumed runs."
+}

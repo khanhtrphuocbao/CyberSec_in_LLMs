@@ -1,0 +1,18 @@
+{
+  "variant": "V1",
+  "total": 1273,
+  "valid": 1273,
+  "invalid": 0,
+  "errors": 0,
+  "correct": 1179,
+  "incorrect": 94,
+  "accuracy": 0.9261586802827966,
+  "total_tokens": 613170,
+  "prompt_tokens": 387737,
+  "completion_tokens": 225433,
+  "avg_tokens_per_question": 481.67321288295364,
+  "total_latency_seconds": 8386.232790470123,
+  "avg_latency_seconds": 6.587771241531912,
+  "total_time_seconds": null,
+  "total_time_note": "Wall-clock time cannot be reconstructed from results after a resumed run; resume_v1.log only records the final 270-question segment (26.7 minutes)."
+}
