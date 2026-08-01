@@ -52,6 +52,17 @@ MedAgentPro/                        # Project root
     ├── evaluation/                 #   📊 Benchmark & evaluation
     │   └── runner.py               #     MedQAEvaluator — 5-variant benchmark
     │
+    ├── demo/                       #   🖥️ Local Streamlit evidence board
+    │   ├── app.py                  #     Dashboard, Question Runner, Agent Trace tabs
+    │   ├── data.py                 #     Read-only result/trace formatting helpers
+    │   ├── runner.py               #     CLI adapter + custom-question solve adapter
+    │   └── requirements.txt        #     Streamlit UI dependencies (includes watchdog)
+    │
+    ├── tests/                      #   🧪 Unit tests (no OpenAI/Chroma calls)
+    │   ├── test_demo_app.py        #     Streamlit AppTest coverage
+    │   ├── test_demo_data.py       #     Dashboard data helpers
+    │   └── test_demo_runner.py     #     Runner adapters with fakes
+    │
     └── scripts/                    #   🛠️ Standalone utilities
         └── ingest_sample_data.py   #     Sample medical-text ingestion
 ```
@@ -96,6 +107,32 @@ Chế độ này không dùng checkpoint benchmark. Nó ghi JSON vào
 `results/single_question/V*/qXXXX.json` và console log vào
 `logs/single_question/V*/qXXXX.log`, nên không ghi đè
 `results_V*/results_V*.json`.
+
+### Dashboard demo
+
+Dashboard Streamlit so sánh artifact V0–V4, chạy một question-index qua CLI
+và hiển thị RAG/agent trace. Cài dependency UI một lần rồi chạy local:
+
+```bash
+cd medqa_rag
+../venv/bin/pip install -r demo/requirements.txt
+../venv/bin/streamlit run demo/app.py
+```
+
+Nếu clone chưa có virtual environment, tạo venv trước rồi cài dependency của
+project và UI vào cùng môi trường. `watchdog` trong `demo/requirements.txt`
+giúp Streamlit dùng filesystem watcher, tránh cảnh báo lazy image import từ
+Transformers trên dashboard text-only.
+
+Dashboard đọc `results/V*/results_V*.json` mà không gọi API. API chỉ được gọi
+khi bấm chạy variant trong tab **Question runner**; key tiếp tục được đọc từ
+`.env`. Tab này có thể chạy một question-index của test set và đối chiếu từng
+dự đoán với đáp án chuẩn, hoặc nhận câu hỏi/lựa chọn dán thủ công (mỗi lựa
+chọn một dòng) để chạy V0–V4 trực tiếp trong phiên. Tab **Agent Trace** tự
+theo nguồn đang chọn ở Question Runner: test set đọc JSON/log artifact; câu
+hỏi tuỳ ý đọc trace của variant vừa chạy từ session hiện tại. Câu tự nhập sẽ
+không còn trace khi refresh trang hoặc restart Streamlit và không được ghi vào
+benchmark results.
 
 ### Legacy parent-project commands
 
