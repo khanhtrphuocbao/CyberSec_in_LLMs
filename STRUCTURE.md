@@ -58,17 +58,6 @@ MedAgentPro/                        # Project root
 
 ---
 
-## 📊 Benchmark Results
-
-| Variant | Accuracy | Status | Duration |
-|---------|:--------:|--------|----------|
-| **V1** | 92.6% | ✅ Completed | 26.7 min |
-| **V2** | TBD | 🔄 Running | ~15h ETA |
-| **V3** | TBD | ⏳ Pending | ~TBD |
-| **V4** | TBD | ⏳ Pending | ~TBD |
-
-**V1**: 1179/1273 correct, 0 errors. Dataset: MedQA-USMLE (1273 questions).
-
 ### Running Benchmarks
 
 This repository is self-contained for the V2/V3 benchmark runners and their
@@ -89,6 +78,24 @@ HF_HUB_OFFLINE=1 nohup python -u run_v3.py --workers 2 > run_v3.log 2>&1 &
 The wrappers load this checkout as the `medqa_rag` package even if the clone
 directory has a different name. A running benchmark launched from the former
 parent-level wrapper is unaffected.
+
+### Chạy một câu theo index
+
+Các wrapper `run_v0.py` đến `run_v4.py` đều hỗ trợ chạy một dòng cụ thể của
+test set bằng index **zero-based** và mặc định đọc `OPENAI_API_KEY` từ `.env`:
+
+```bash
+HF_HUB_OFFLINE=1 python -u run_v0.py --question-index 10
+HF_HUB_OFFLINE=1 python -u run_v1.py --question-index 10
+HF_HUB_OFFLINE=1 python -u run_v2.py --question-index 10
+HF_HUB_OFFLINE=1 python -u run_v3.py --question-index 10
+HF_HUB_OFFLINE=1 python -u run_v4.py --question-index 10
+```
+
+Chế độ này không dùng checkpoint benchmark. Nó ghi JSON vào
+`results/single_question/V*/qXXXX.json` và console log vào
+`logs/single_question/V*/qXXXX.log`, nên không ghi đè
+`results_V*/results_V*.json`.
 
 ### Legacy parent-project commands
 
